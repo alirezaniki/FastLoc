@@ -12,7 +12,7 @@ Nothing !
 Grid points within the area of interest supposed to be learnt by the trainer. This file will be built by the program.
 
 
-2- IRSC_Vel
+2- Area_Vel
 ------------
 
 This file contains the velocity model used by the trainer to work on the grid points. This is used to build a proper formatted velocity model (Velmodel.tvel).
