@@ -60,7 +60,7 @@ GLG1 20:26:06.3
 
 This file contains distance of each couple of stations (station1, station2). You will be asked to whether update this file or not every time you run the Synthetic_Trainer.
 
-# ~~~~~~~~~~~ How to use this Program? ~~~~~~~~~~~~~~~~~~~~~
+# ~~~~~ How to use this Program? ~~~~~~
 
 First of all you need to prepare the following requisites:
 
