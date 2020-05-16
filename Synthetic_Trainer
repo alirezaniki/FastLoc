@@ -1,0 +1,229 @@
+#!/bin/bash
+
+home=`dirname $(readlink -f "$0")`
+input="$home/input"
+process="$home/Process"
+DB="$home/DataBase"
+
+#~~~~~~~~~~~~~~~~~ Parameters
+Dep1="8"
+Dep2="12"
+Dep_S="2"
+VelModel="Area_Vel"
+Center_Lon="47.0"
+Center_Lat="34.5"
+Grid_Inc="0.1"
+Radius="1.0"
+PnPg_Th="190"
+
+#~~~~~~~~~~~~~~~~~~ Functions
+
+round ()
+{
+echo $(printf %.$2f $(echo "scale=$2;(((10^$2)*$1)+0.5)/(10^$2)" | bc))
+}
+
+deg2rad ()
+{
+	echo "scale=3; $1 * 0.01745329" | bc -l	
+}
+
+rad2deg ()
+{
+	echo "scale=3; $1 * 57.2957795" | bc -l 
+}
+
+Absolute ()
+{
+	echo "scale=1; sqrt ($1 * $1)" | bc -l
+}	
+
+distance ()
+{
+	stlat=`deg2rad $1`
+	stlon=`deg2rad $2`
+	evela=`deg2rad $3`
+	evelo=`deg2rad $4`
+	lodif=`echo "$stlon - $evelo" | bc -l`
+	
+	DI=`echo "s ($evela) * s ($stlat) + c ($evela) * c ($stlat) * c ($lodif)" | bc -l`
+	aD=`echo "3.14159 / 2 - a ($DI / sqrt (1 - $DI * $DI ))" | bc -l` && deg_aD=`rad2deg $aD`
+	Dist=`echo "scale=2; $deg_aD * 60 * 1.15078 * 1.609344" | bc -l`
+	echo `round $Dist 2`
+}
+
+grid ()
+{
+	cat /dev/null > $home/Grids.dat
+	GrdMinLat=`echo "scale=0; $Center_Lat - $Radius" | bc -l`
+	GrdMaxLat=`echo "scale=0; $Center_Lat + $Radius" | bc -l`
+	GrdMinLon=`echo "scale=0; $Center_Lon - $Radius" | bc -l`
+	GrdMaxLon=`echo "scale=0; $Center_Lon + $Radius" | bc -l`
+	
+	for Glat in $(seq "$GrdMinLat" "$Grid_Inc" "$GrdMaxLat"); do
+		for Glon in $(seq "$GrdMinLon" "$Grid_Inc" "$GrdMaxLon"); do
+			echo "$Glat $Glon" >> $home/Grids.dat
+		done	
+	done	
+}
+
+Regression ()
+{
+	cat /dev/null > .down 
+	cat /dev/null > .up
+	# awk '{print $3,(log($4)/log(10))}' $1 > .tmp
+	Xmean=`awk '{sum+=$3} END {print sum/NR}' $1`
+	Ymean=`awk '{sum+=$4} END {print sum/NR}' $1`
+
+	while read info; do
+		echo $info | awk -v Xave="$Xmean" -v Yave="$Ymean" '{print ($3 - Xave) * ($4 - Yave)}' >> .up
+		echo $info | awk -v Xave="$Xmean" '{print ($3 - Xave) * ($3 - Xave)}' >> .down
+	done < $1
+	UpSum=`awk '{Sum+=$1} END {print Sum}' .up`	
+	DoSum=`awk '{SuM+=$1} END {print SuM}' .down`
+	A=`echo "scale=4; $UpSum / $DoSum" | bc -l`
+	B=`echo "scale=4; $Ymean - ($A * $Xmean)" | bc -l`
+	awk -v A=$A -v B=$B 'BEGIN {print B / A}' 
+}
+
+vel_maker ()
+{
+	cat /dev/null > $home/Velmodel.tvel
+	sed -i '/^$/d' $home/$VelModel
+	read -a DP <<< `awk 'NR > 1 {print $1}' $home/$VelModel`
+	read -a VP <<< `awk 'NR > 1 {print $2}' $home/$VelModel`
+	read -a VS <<< `awk 'NR > 1 {print $3}' $home/$VelModel`
+	read -a DN <<< `awk 'NR > 1 {print $4}' $home/$VelModel`
+	
+	echo -e "# Header Line\n# Header Line\n${DP[0]}  ${VP[0]}   ${VS[0]}   ${DN[0]}" > $home/Velmodel.tvel
+	for ((i=1; i<${#DP[@]}; i++)); do
+		[[ -z ${DP[$i]} ]] || [[ -z ${VP[$i]} ]] || [[ -z ${VS[$i]} ]] && echo "Incomplete Velocity model!" && exit
+		echo "${DP[$i]}  ${VP[$((i-1))]}   ${VS[$((i-1))]}   ${DN[$((i-1))]}" >> $home/Velmodel.tvel
+		echo "${DP[$i]}  ${VP[$i]}   ${VS[$i]}   ${DN[$i]}" >> $home/Velmodel.tvel
+	done
+}
+
+
+Ttime ()
+{
+	read -a ttm <<< `cake arrivals --sdepth=$dep --distances=$1 --model=$home/Velmodel.tvel --phase="$phase"`
+	echo ${ttm[19]}
+}  
+
+station_station_dist ()
+{
+	cat /dev/null > $home/sta_sta_dist
+	# Station-Station Distances
+	cat $home/stations.used | while read stname; do
+		stlat=`grep -w "$stname" $home/stations.info | awk '{print $2}'`
+		stlon=`grep -w "$stname" $home/stations.info | awk '{print $3}'`	
+		[[ -z "$stlat" ]] || [[ -z "$stlon" ]] && echo "Lack of Information, St : $stname" && exit	
+		cat $home/stations.used | while read st; do
+			[[ `grep -w "$stname $st" $home/sta_sta_dist 2> /dev/null` ]] && continue
+			stla=`grep -w "$st" $home/stations.info | awk '{print $2}'`
+			stlo=`grep -w "$st" $home/stations.info | awk '{print $3}'`	
+			[[ -z "$stla" ]] || [[ -z "$stlo" ]] && echo "Lack of Information, St : $st" && exit
+			dist=`distance $stlat $stlon $stla $stlo`
+			if [[ "$st" = "$stname" ]]; then
+				echo "$stname $st $dist" >> $home/sta_sta_dist
+			else	
+				echo -e "$stname $st $dist\n$st $stname $dist" >> $home/sta_sta_dist	
+			fi	
+		done 
+	done
+}
+
+Train ()
+{
+	if [[ `ls -1 $DB/* 2> /dev/null` ]]; then
+		while true; do
+			read -p "DataBase directory is not empty, Remove all (Y/N)? " Ans
+			case $Ans in
+				[Yy]) 
+					rm -f $DB/* 
+					;;
+				[Nn]) 
+					break 
+					;;
+				* ) 
+					echo "Please answer with Y or N." 
+					;;
+			esac
+		done
+	fi
+	cat $home/Grids.dat | while read grd; do
+		Glat=`echo $grd | cut -f 1 -d " "`
+		Glon=`echo $grd | cut -f 2 -d " "`
+		echo "Training grid point, $Glat $Glon"
+		[[ `grep -w "$Glat $Glon" $DB/* 2> /dev/null` ]] && echo "Grid point has already been trained ($Glat $Glon)" && continue
+
+		# Grid to Station Distances
+		cat stations.used | while read st; do
+			stlat=`grep -w $st $home/stations.info | cut -f 2 -d " "`
+			stlon=`grep -w $st $home/stations.info | cut -f 3 -d " "`
+			[[ -z "$stlat" ]] || [[ -z "$stlon" ]] && echo "Incomplete info, sta : $st" && exit
+			dist=`distance $stlat $stlon $Glat $Glon`
+			echo "$st $dist" 
+		done > $process/dist_tmp
+	
+		closest_st=`sort -n -k 2 $process/dist_tmp | cut -f 1 -d " " | head -1`
+		secondC_st=`sort -n -k 2 $process/dist_tmp | cut -f 1 -d " " | head -2 | tail -1`
+		thirD_st=`sort -n -k 2 $process/dist_tmp | cut -f 1 -d " " | head -3 | tail -1`
+		fourth_st=`sort -n -k 2 $process/dist_tmp | cut -f 1 -d " " | head -4 | tail -1`
+		closest_dist=`grep -w "$closest_st" $process/dist_tmp | cut -f 2 -d " "`
+		secondC_dist=`grep -w "$secondC_st" $process/dist_tmp | cut -f 2 -d " "`			
+		
+		for dep in $(seq $Dep1 $Dep_S $Dep2); do		# p = Pg , P = Pn
+			(( `echo "$closest_dist < $PnPg_Th" | bc -l` )) && phase="p" || phase="P"
+			closest_TT=`Ttime $closest_dist 2> /dev/null`
+			if [[ -z "$closest_TT" ]]; then 
+				[[ "$phase" = "p" ]] && phase="P" || phase="p"
+				closest_TT=`Ttime $closest_dist 2> /dev/null` 
+			fi	
+			(( `echo "$secondC_dist < $PnPg_Th" | bc -l` )) && phase="p" || phase="P"
+			secondC_TT=`Ttime $secondC_dist 2> /dev/null`
+			if [[ -z "$secondC_TT" ]]; then 
+				[[ "$phase" = "p" ]] && phase="P" || phase="p"
+				secondC_TT=`Ttime $secondC_dist 2> /dev/null` 
+			fi	
+			Time_DIf=`echo "scale=2; $secondC_TT - $closest_TT" | bc -l`			 						 
+			cat stations.used | while read st; do	
+				dist=`grep -w "$st" $process/dist_tmp | cut -f 2 -d " "` 
+				(( `echo "$dist < $PnPg_Th" | bc -l` )) && phase="p" || phase="P"
+				TTm=`Ttime $dist 2> /dev/null` 
+				if [[ -z "$TTm" ]]; then 
+					[[ "$phase" = "p" ]] && phase="P" || phase="p"
+					TTm=`Ttime $dist 2> /dev/null` 
+				fi
+				diff_tt=`echo "$TTm - $closest_TT" | bc -l`
+				stst_dis=`grep -w "$st $closest_st" $home/sta_sta_dist | cut -f 3 -d " "`
+				echo "$st $closest_st $stst_dis $diff_tt" >> $process/$Glat-$Glon-$dep.table
+			done
+			Z=`Regression $process/$Glat-$Glon-$dep.table`
+			
+			echo "$Glat $Glon $dep $Z $Time_DIf $secondC_st $thirD_st $fourth_st" >> $DB/$closest_st.params
+		done		
+	done			
+}
+
+rm -f $process/* 2> /dev/null
+vel_maker
+grid
+
+while true; do
+    read -p "Update sta_sta_dist file (Y/N)? " Ans
+    case $Ans in
+        [Yy]) 
+			station_station_dist
+			Train 
+			break 1
+			;;
+        [Nn]) 
+			Train 
+			break 1
+			;;
+        *) 
+			echo "Please answer with Y or N." 
+			;;
+    esac
+done

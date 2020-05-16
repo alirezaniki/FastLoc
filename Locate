@@ -1,0 +1,155 @@
+#!/bin/bash
+
+home=`dirname $(readlink -f "$0")`
+input="$home/Input"
+DB="$home/DataBase"
+output="$home/Output"
+
+#~~~~~~~~~~~~~~~~~~~~ Params
+S12_TD="5.0"
+Cr_Inc_Max="5.0"
+deg="113"
+PnPg_Th="190"
+
+#~~~~~~~~~~~~~~~~~~~~ Functions (Do not change)
+round ()
+{
+echo $(printf %.$2f $(echo "scale=$2;(((10^$2)*$1)+0.5)/(10^$2)" | bc))
+}
+
+deg2rad ()
+{
+	echo "scale=3; $1 * 0.01745329" | bc -l	
+}
+
+rad2deg ()
+{
+	echo "scale=3; $1 * 57.2957795" | bc -l 
+}
+
+time2sec ()
+{
+	sec=`date '+%s' --date="$1"`
+	msc=`date '+%N' --date="$1"`
+	echo "scale=2; $sec + ($msc / 1000000000)" | bc -l
+}
+
+Absolute ()
+{
+	echo "scale=1; sqrt ($1 * $1)" | bc -l
+}	
+
+distance ()
+{
+	stlat=`deg2rad $1`
+	stlon=`deg2rad $2`
+	evela=`deg2rad $3`
+	evelo=`deg2rad $4`
+	lodif=`echo "$stlon - $evelo" | bc -l`
+	
+	DI=`echo "s ($evela) * s ($stlat) + c ($evela) * c ($stlat) * c ($lodif)" | bc -l`
+	aD=`echo "3.14159 / 2 - a ($DI / sqrt (1 - $DI * $DI ))" | bc -l` && deg_aD=`rad2deg $aD`
+	Dist=`echo "scale=2; $deg_aD * 60 * 1.15078 * 1.609344" | bc -l`
+	echo `round $Dist 2`
+}
+
+preparation ()
+{
+	rm $input/*opt 2> /dev/null
+	cat $home/stations.used | while read st; do
+		for event in `ls -1 $input/*.dat`; do
+			out="${event%.*}".opt			
+			grep -w "$st" $event >> $out
+		done
+	done
+}
+
+Regression ()
+{
+	cat /dev/null > .down 
+	cat /dev/null > .up
+	Xmean=`awk '{sum+=$3} END {print sum/NR}' $1`
+	Ymean=`awk '{sum+=$4} END {print sum/NR}' $1`
+
+	while read info; do
+		echo $info | awk -v Xave="$Xmean" -v Yave="$Ymean" '{print ($3 - Xave) * ($4 - Yave)}' >> .up
+		echo $info | awk -v Xave="$Xmean" '{print ($3 - Xave) * ($3 - Xave)}' >> .down
+	done < $1
+	UpSum=`awk '{Sum+=$1} END {print Sum}' .up`	
+	DoSum=`awk '{SuM+=$1} END {print SuM}' .down`
+	A=`echo "scale=4; $UpSum / $DoSum" | bc -l`
+	B=`echo "scale=4; $Ymean - ($A * $Xmean)" | bc -l`
+	awk -v A=$A -v B=$B 'BEGIN {print B / A}' 
+}
+
+do_Regression ()
+{
+	cat /dev/null > .dist_time
+	export Closest_Inf=`sort -k 2 $event | head -1`
+	export SecondC_Inf=`sort -k 2 $event | head -2 | tail -1`
+	export Closest_Sta=`echo $Closest_Inf | awk '{print $1}'`
+	export SecondC_Sta=`echo $SecondC_Inf | awk '{print $1}'`
+	export ThirD_Sta=`sort -k 2 $event | head -3 | tail -1 | awk '{print $1}'`
+	export FourtH_Sta=`sort -k 2 $event | head -4 | tail -1 | awk '{print $1}'`
+	export Closest_Tme=`echo $Closest_Inf | awk '{print $2}'`
+	export SecondC_Tme=`echo $SecondC_Inf | awk '{print $2}'`	
+	export Closest_TmS=`time2sec $Closest_Tme`
+	export SecondC_TmS=`time2sec $SecondC_Tme`
+	export Closest_Lat=`grep -w "$Closest_Sta" $home/stations.info | awk '{print $2}'`
+	export Closest_Lon=`grep -w "$Closest_Sta" $home/stations.info | awk '{print $3}'`
+	export SecondC_Lat=`grep -w "$SecondC_Sta" $home/stations.info | awk '{print $2}'`
+	export SecondC_Lon=`grep -w "$SecondC_Sta" $home/stations.info | awk '{print $3}'`
+	export timedif=`echo "$SecondC_TmS - $Closest_TmS" | bc -l`
+	[[ -z "$Closest_Lat" ]] || [[ -z "$Closest_Lon" ]] && echo "Info not found, sta : $Closest_Sta" && exit
+	[[ -z "$SecondC_Lat" ]] || [[ -z "$SecondC_Lon" ]] && echo "Info not found, sta : $SecondC_Sta" && exit	
+
+	sort -k 2 $event | while read info; do
+		stname=`echo $info | awk '{print $1}'`	
+		dist=`grep -w "$stname $Closest_Sta" $home/sta_sta_dist | cut -f 3 -d " "`
+		[[ -z "$dist" ]] && echo "incomplete st to st distance info ($stname $Closest_Sta)" && exit		
+		sttime=`echo $info | awk '{print $2}'`
+		sttimS=`time2sec $sttime`
+		Tdiff=`echo "$sttimS - $Closest_TmS" | bc -l`
+		echo "$Closest_Sta $stname $dist $Tdiff"
+	done > .dist_time
+	export Z=`Regression .dist_time`
+}
+
+FindIt ()
+{
+	preparation
+	cd $input
+	for event in `ls *opt`; do
+		cat /dev/null > $output/.tmp
+		do_Regression 
+		# Condition 2 (time difference)
+		t1=`echo "$timedif - $S12_TD" | bc -l`
+		t2=`echo "$timedif + $S12_TD" | bc -l`	
+		S2="$SecondC_Sta" && S3="$ThirD_Sta" && S4="$FourtH_Sta"
+		Cr_Inc="0.5"
+		while true; do
+			z1=`echo "$Z - $Cr_Inc" | bc -l`
+			z2=`echo "$Z + $Cr_Inc" | bc -l`
+			awk -v z1="$z1" -v z2="$z2" -v t1="$t1" -v t2="$t2" -v S2="$S2" -v S3="$S3" -v S4="$S4" \
+			'{if ($4 > z1 && $4 < z2 && $5 > t1 && $5 < t2 && $6 == S2 && $7 == S3 && $8 == S4) print $0}' $DB/"$Closest_Sta".params 2> /dev/null > $output/.tmp
+			awk -v z1="$z1" -v z2="$z2" -v t1="$t1" -v t2="$t2" -v S2="$S2" -v S3="$S3" -v S4="$S4" \
+			'{if ($4 > z1 && $4 < z2 && $5 > t1 && $5 < t2 && $6 == S3 && $7 == S2 && $8 == S4) print $0}' $DB/"$Closest_Sta".params 2> /dev/null >> $output/.tmp			
+			[[ -s $output/.tmp ]] && break 1 || Cr_Inc=`echo "$Cr_Inc + 0.5" | bc -l`
+			(( `echo "$Cr_Inc > $Cr_Inc_Max" | bc -l` )) && echo "Program failed to locate event, $event" && break 2
+		done	
+				
+		z=`awk -v c=4 -v t=$Z 'NR==1{d=$c-t;d=d<0?-d:d;v=$c;next}{m=$c-t;m=m<0?-m:m}m<d{d=m;v=$c}END{print v}' $output/.tmp`
+		
+		if (( `echo "$z < 0" | bc -l` )); then
+			grep -w -- "$z" $output/.tmp | awk '{print $1,$2,$3}' > $output/${event%.*}.loc
+		else
+			grep -w "$z" $output/.tmp | awk '{print $1,$2,$3}' > $output/${event%.*}.loc
+		fi
+		echo "$event, Most likely location is:"
+		awk '{print $1,$2,$3}' $output/${event%.*}.loc
+		echo "#~~~~~~~~~~~~~~~"
+	done			
+}
+
+FindIt
+
