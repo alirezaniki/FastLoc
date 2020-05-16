@@ -4,7 +4,7 @@ A fast machine learning based algorithm for determination of local earthquakes l
 A manual will be added soon.
 
 # Required Softwares:
-Nothing !
+Pyrocko
 
 # Description of files
 
