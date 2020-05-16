@@ -1,5 +1,5 @@
 #!/bin/bash
-
+ 
 home=`dirname $(readlink -f "$0")`
 input="$home/input"
 process="$home/Process"
