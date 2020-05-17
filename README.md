@@ -55,7 +55,7 @@ This file contains the distance between each couple of stations (station1, stati
 
 # ~~~~~ How to use this Program? ~~~~~~
 
-First of all you need to prepare the following requisites:
+First of all you need to provide the following requisites:
 
 1- consider a region of interest and define it in the Synthetic_Trainer file, lines 13-15.
 
