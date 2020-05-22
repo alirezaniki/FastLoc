@@ -140,7 +140,7 @@ Train ()
 			read -p "DataBase directory is not empty, Remove all (Y/N)? " Ans
 			case $Ans in
 				[Yy]) 
-					rm -f $DB/* 
+					rm -f $DB/* && break
 					;;
 				[Nn]) 
 					break 
