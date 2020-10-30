@@ -1,7 +1,5 @@
 # FastLoc
-A fast machine learning based algorithm for determination of local earthquakes location.
-
-A manual will be added soon.
+A fast train-based algorithm to determine local earthquakes location.
 
 # Required Softwares:
 Pyrocko
