@@ -6,8 +6,8 @@ DB="$home/DataBase"
 output="$home/Output"
 
 #~~~~~~~~~~~~~~~~~~~~ Params
-S12_TD="5.0"
-Cr_Inc_Max="5.0"
+S12_TD="10.0"
+Cr_Inc_Max="0.9"	# < 1.0
 deg="113"
 PnPg_Th="190"
 
@@ -66,20 +66,17 @@ preparation ()
 
 Regression ()
 {
-	cat /dev/null > .down 
-	cat /dev/null > .up
-	Xmean=`awk '{sum+=$3} END {print sum/NR}' $1`
-	Ymean=`awk '{sum+=$4} END {print sum/NR}' $1`
-
-	while read info; do
-		echo $info | awk -v Xave="$Xmean" -v Yave="$Ymean" '{print ($3 - Xave) * ($4 - Yave)}' >> .up
-		echo $info | awk -v Xave="$Xmean" '{print ($3 - Xave) * ($3 - Xave)}' >> .down
-	done < $1
-	UpSum=`awk '{Sum+=$1} END {print Sum}' .up`	
-	DoSum=`awk '{SuM+=$1} END {print SuM}' .down`
-	A=`echo "scale=4; $UpSum / $DoSum" | bc -l`
-	B=`echo "scale=4; $Ymean - ($A * $Xmean)" | bc -l`
-	awk -v A=$A -v B=$B 'BEGIN {print B / A}' 
+	x=`awk '{print $3}' $1 | tr '\n' ', '`
+	y=`awk '{print $4}' $1 | tr '\n' ', '`
+	
+	python - <<- END
+		from scipy import stats
+		import numpy as np
+		X = np.array ([$x])
+		Y = np.array ([$y])
+		slope, intercept, r, _, _ = stats.linregress(X, Y)
+		print (r**2)
+	END
 }
 
 do_Regression ()
@@ -106,7 +103,7 @@ do_Regression ()
 	sort -k 2 $event | while read info; do
 		stname=`echo $info | awk '{print $1}'`	
 		dist=`grep -w "$stname $Closest_Sta" $home/sta_sta_dist | cut -f 3 -d " "`
-		[[ -z "$dist" ]] && echo "incomplete st to st distance info ($stname $Closest_Sta)" && exit		
+		[[ -z "$dist" ]] && echo "incomplete st to st distance info ($stname $Closest_Sta)" && exit
 		sttime=`echo $info | awk '{print $2}'`
 		sttimS=`time2sec $sttime`
 		Tdiff=`echo "$sttimS - $Closest_TmS" | bc -l`
@@ -122,11 +119,10 @@ FindIt ()
 	for event in `ls *opt`; do
 		cat /dev/null > $output/.tmp
 		do_Regression 
-		# Condition 2 (time difference)
 		t1=`echo "$timedif - $S12_TD" | bc -l`
 		t2=`echo "$timedif + $S12_TD" | bc -l`	
 		S2="$SecondC_Sta" && S3="$ThirD_Sta" && S4="$FourtH_Sta"
-		Cr_Inc="0.5"
+		Cr_Inc="0.1"
 		while true; do
 			z1=`echo "$Z - $Cr_Inc" | bc -l`
 			z2=`echo "$Z + $Cr_Inc" | bc -l`
@@ -134,7 +130,7 @@ FindIt ()
 			'{if ($4 > z1 && $4 < z2 && $5 > t1 && $5 < t2 && $6 == S2 && $7 == S3 && $8 == S4) print $0}' $DB/"$Closest_Sta".params 2> /dev/null > $output/.tmp
 			awk -v z1="$z1" -v z2="$z2" -v t1="$t1" -v t2="$t2" -v S2="$S2" -v S3="$S3" -v S4="$S4" \
 			'{if ($4 > z1 && $4 < z2 && $5 > t1 && $5 < t2 && $6 == S3 && $7 == S2 && $8 == S4) print $0}' $DB/"$Closest_Sta".params 2> /dev/null >> $output/.tmp			
-			[[ -s $output/.tmp ]] && break 1 || Cr_Inc=`echo "$Cr_Inc + 0.5" | bc -l`
+			[[ -s $output/.tmp ]] && break 1 || Cr_Inc=`echo "$Cr_Inc + 0.1" | bc -l`
 			(( `echo "$Cr_Inc > $Cr_Inc_Max" | bc -l` )) && echo "Program failed to locate event, $event" && break 2
 		done	
 				
@@ -152,4 +148,3 @@ FindIt ()
 }
 
 FindIt
- 
