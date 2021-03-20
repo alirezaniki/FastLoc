@@ -69,21 +69,17 @@ grid ()
 
 Regression ()
 {
-	cat /dev/null > .down 
-	cat /dev/null > .up
-	# awk '{print $3,(log($4)/log(10))}' $1 > .tmp
-	Xmean=`awk '{sum+=$3} END {print sum/NR}' $1`
-	Ymean=`awk '{sum+=$4} END {print sum/NR}' $1`
-
-	while read info; do
-		echo $info | awk -v Xave="$Xmean" -v Yave="$Ymean" '{print ($3 - Xave) * ($4 - Yave)}' >> .up
-		echo $info | awk -v Xave="$Xmean" '{print ($3 - Xave) * ($3 - Xave)}' >> .down
-	done < $1
-	UpSum=`awk '{Sum+=$1} END {print Sum}' .up`	
-	DoSum=`awk '{SuM+=$1} END {print SuM}' .down`
-	A=`echo "scale=4; $UpSum / $DoSum" | bc -l`
-	B=`echo "scale=4; $Ymean - ($A * $Xmean)" | bc -l`
-	awk -v A=$A -v B=$B 'BEGIN {print B / A}' 
+	x=`awk '{print $3}' $1 | tr '\n' ', '`
+	y=`awk '{print $4}' $1 | tr '\n' ', '`
+	
+	python - <<- END
+		from scipy import stats
+		import numpy as np
+		X = np.array ([$x])
+		Y = np.array ([$y])
+		slope, intercept, r, _, _ = stats.linregress(X, Y)
+		print (r**2)
+	END
 }
 
 vel_maker ()
@@ -195,6 +191,7 @@ Train ()
 					[[ "$phase" = "p" ]] && phase="P" || phase="p"
 					TTm=`Ttime $dist 2> /dev/null` 
 				fi
+				[[ -z "$TTm" ]] && continue
 				diff_tt=`echo "$TTm - $closest_TT" | bc -l`
 				stst_dis=`grep -w "$st $closest_st" $home/sta_sta_dist | cut -f 3 -d " "`
 				echo "$st $closest_st $stst_dis $diff_tt" >> $process/$Glat-$Glon-$dep.table
